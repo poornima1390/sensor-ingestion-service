@@ -9,16 +9,16 @@ scaling path — lives in [Spec.md](Spec.md).
 
 ## Status
 
-**Phase 2 — ingestion.** Validation, storage and the partial-success batch
-contract are live. Query and aggregation land in Phase 3.
+**Phase 3 — query and aggregation.** All four functional endpoints are live and
+deployed. `/metrics` lands in Phase 4.
 
 | Endpoint | Status |
 |---|---|
 | `GET /healthz` | ✅ live — liveness probe, no DB dependency |
 | `GET /readyz` | ✅ live — readiness probe, checks the database |
 | `POST /readings` | ✅ live — single or batch, partial success |
-| `GET /readings` | Phase 3 |
-| `GET /readings/stats` | Phase 3 |
+| `GET /readings` | ✅ live — filtering + pagination |
+| `GET /readings/stats` | ✅ live — min/max/avg/count aggregation |
 | `GET /metrics` | Phase 4 |
 
 ## Ingestion contract
@@ -59,6 +59,60 @@ client has.
 Valid items are stored even when siblings fail. That is the point of partial
 success: one malformed reading from a flaky sensor must not cost a fleet-wide
 batch its good data.
+
+## Query
+
+`GET /readings` filters on `device_id`, `sensor_type`, `start` and `end`, and
+paginates with `limit` (default 50, max 1000) and `offset`.
+
+```jsonc
+{
+  "items": [ /* newest first */ ],
+  "pagination": {"limit": 50, "offset": 0, "total": 1284}
+}
+```
+
+The time window is **`start` inclusive, `end` exclusive**, so adjacent windows
+tile without counting a reading twice.
+
+Results are ordered `timestamp DESC, id DESC`. The `id` tiebreaker is
+load-bearing rather than cosmetic: batch ingests routinely produce many readings
+sharing one timestamp, and ordering by timestamp alone leaves their relative
+order undefined — consecutive pages then repeat some rows and silently skip
+others. There is a test that pages through ten identical timestamps and asserts
+every row is seen exactly once.
+
+Offset pagination is a deliberate time-box choice; keyset pagination on
+`(timestamp, id)` is the documented upgrade for when deep offsets start scanning.
+
+`GET /readings/stats` aggregates `min`/`max`/`avg`/`count`, with `group_by`
+accepting `device_id`, `sensor_type`, or both comma-separated.
+
+```jsonc
+{
+  "group_by": ["sensor_type"],
+  "window": {"start": null, "end": null},
+  "groups": [
+    {"key": {"sensor_type": "temperature"},
+     "count": 3, "min": 10.0, "max": 30.0, "avg": 20.0}
+  ]
+}
+```
+
+**`group_by` defaults to `sensor_type`, not to a single global aggregate**,
+because an average taken across temperature (°C), pressure (hPa) and battery (%)
+is a number with no meaning. Defaulting to a per-type breakdown means the
+endpoint cannot return nonsense by accident.
+
+Aggregation runs as a SQL `GROUP BY`; the rows never leave the database. Postgres
+returns `AVG` as `Decimal` and SQLite as `float`, so it is coerced and rounded in
+the repository to keep the JSON identical on both.
+
+### 400 vs 422 on query parameters
+
+`400` means the value could not be parsed at all (`start=not-a-date`,
+`limit=many`). `422` means it parsed and then failed a rule (`limit=5000`,
+`offset=-1`, `sensor_type=vibration`, `start` later than `end`).
 
 ### Validation
 

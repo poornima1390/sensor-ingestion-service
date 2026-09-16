@@ -34,6 +34,21 @@ def error_body(
 
 # Maps an HTTP status to the machine-readable `error` code used when a handler
 # raises HTTPException without supplying one.
+# Errors meaning "this value could not be parsed at all" — a 400. Constraint
+# failures on a value that *did* parse (over a maximum, negative, unknown enum)
+# stay 422. Scoped to query parameters: request bodies reach our own per-item
+# validation instead, which reports its own codes.
+_PARSE_ERROR_TYPES = {
+    "int_parsing",
+    "int_type",
+    "float_parsing",
+    "bool_parsing",
+    "datetime_parsing",
+    "datetime_type",
+    "datetime_from_date_parsing",
+    "uuid_parsing",
+}
+
 _STATUS_CODES = {
     400: "bad_request",
     404: "not_found",
@@ -41,6 +56,18 @@ _STATUS_CODES = {
     413: "payload_too_large",
     422: "validation_failed",
     503: "service_unavailable",
+}
+
+
+_CODE_MAP_QUERY = {
+    "int_parsing": "invalid_integer",
+    "int_type": "invalid_integer",
+    "float_parsing": "invalid_number",
+    "bool_parsing": "invalid_boolean",
+    "datetime_parsing": "invalid_timestamp",
+    "datetime_type": "invalid_timestamp",
+    "datetime_from_date_parsing": "invalid_timestamp",
+    "uuid_parsing": "invalid_uuid",
 }
 
 
@@ -64,6 +91,28 @@ def install_exception_handlers(app: FastAPI) -> None:
                 content=error_body(
                     "malformed_json",
                     "Request body is not valid JSON.",
+                ),
+            )
+
+        unparseable = [
+            err
+            for err in raw
+            if tuple(err.get("loc", ()))[:1] == ("query",) and err.get("type") in _PARSE_ERROR_TYPES
+        ]
+        if unparseable:
+            return JSONResponse(
+                status_code=400,
+                content=error_body(
+                    "invalid_query_parameter",
+                    "One or more query parameters could not be parsed.",
+                    [
+                        {
+                            "field": _field_path(err.get("loc", ())),
+                            "code": _CODE_MAP_QUERY.get(str(err.get("type")), "invalid_value"),
+                            "message": str(err.get("msg", "could not be parsed")),
+                        }
+                        for err in unparseable
+                    ],
                 ),
             )
 

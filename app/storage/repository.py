@@ -9,11 +9,13 @@ is a pre-check plus a constraint backstop rather than an upsert.
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.schemas.query import ReadingFilters
 from app.schemas.reading import ReadingIn
 from app.storage.models import Reading
 
@@ -132,3 +134,71 @@ class ReadingRepository:
             unit=item.unit,
             timestamp=item.timestamp,
         )
+
+    # --- read paths --------------------------------------------------------
+
+    def _apply_filters(self, statement: Select[Any], filters: ReadingFilters) -> Select[Any]:
+        if filters.device_id is not None:
+            statement = statement.where(Reading.device_id == filters.device_id)
+        if filters.sensor_type is not None:
+            statement = statement.where(Reading.sensor_type == filters.sensor_type.value)
+        if filters.start is not None:
+            statement = statement.where(Reading.timestamp >= filters.start)
+        if filters.end is not None:
+            # Exclusive upper bound, so adjacent windows tile without overlapping
+            # and a reading is never counted in two of them.
+            statement = statement.where(Reading.timestamp < filters.end)
+        return statement
+
+    def list_readings(
+        self, filters: ReadingFilters, limit: int, offset: int
+    ) -> tuple[list[Reading], int]:
+        """Return one page of readings plus the total matching count."""
+        total = self.session.scalar(self._apply_filters(select(func.count(Reading.id)), filters))
+
+        rows = (
+            self.session.execute(
+                self._apply_filters(select(Reading), filters)
+                # The id tiebreaker is load-bearing, not cosmetic: batch ingests
+                # routinely produce identical timestamps, and without a
+                # deterministic second sort key consecutive pages silently
+                # overlap and drop rows.
+                .order_by(Reading.timestamp.desc(), Reading.id.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            .scalars()
+            .all()
+        )
+
+        return list(rows), int(total or 0)
+
+    def aggregate(
+        self, filters: ReadingFilters, group_by: Sequence[str]
+    ) -> list[tuple[dict[str, str], int, float, float, float]]:
+        """Aggregate in the database, never in Python — the rows never leave it."""
+        columns = [getattr(Reading, field) for field in group_by]
+
+        statement = self._apply_filters(
+            select(
+                *columns,
+                func.count(Reading.id),
+                func.min(Reading.value),
+                func.max(Reading.value),
+                func.avg(Reading.value),
+            ),
+            filters,
+        ).group_by(*columns)
+
+        rows = self.session.execute(statement.order_by(*columns)).all()
+
+        results = []
+        for row in rows:
+            keys = {field: str(row[index]) for index, field in enumerate(group_by)}
+            count, minimum, maximum, average = row[len(group_by) :]
+            # Postgres returns AVG as Decimal and SQLite as float; coercing here
+            # keeps the JSON identical on both.
+            results.append(
+                (keys, int(count), float(minimum), float(maximum), round(float(average), 4))
+            )
+        return results

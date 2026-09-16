@@ -15,7 +15,18 @@ from app.api.errors import error_body
 from app.config import Settings, get_settings
 from app.domain.ingest import ingest_items
 from app.observability.logging import safe_extra
-from app.schemas.reading import BatchResponse, BatchSummary, ItemResult
+from app.schemas.query import Filters, GroupBy, Page
+from app.schemas.reading import (
+    BatchResponse,
+    BatchSummary,
+    ItemResult,
+    PaginationMeta,
+    ReadingListResponse,
+    ReadingOut,
+    StatGroup,
+    StatsResponse,
+    StatsWindow,
+)
 from app.storage.database import get_session
 from app.storage.repository import ReadingRepository
 
@@ -132,4 +143,36 @@ def _log_outcome(results: list[ItemResult]) -> None:
             readings_duplicate=sum(1 for r in results if r.status == "duplicate"),
             readings_rejected=sum(1 for r in results if r.status == "rejected"),
         ),
+    )
+
+
+@router.get("", response_model=ReadingListResponse, summary="List and filter readings")
+def list_readings(
+    filters: Filters,
+    page: Page,
+    session: Annotated[Session, Depends(get_session)],
+) -> ReadingListResponse:
+    rows, total = ReadingRepository(session).list_readings(filters, page.limit, page.offset)
+
+    return ReadingListResponse(
+        items=[ReadingOut.model_validate(row) for row in rows],
+        pagination=PaginationMeta(limit=page.limit, offset=page.offset, total=total),
+    )
+
+
+@router.get("/stats", response_model=StatsResponse, summary="Aggregate readings")
+def reading_stats(
+    filters: Filters,
+    grouping: GroupBy,
+    session: Annotated[Session, Depends(get_session)],
+) -> StatsResponse:
+    groups = ReadingRepository(session).aggregate(filters, grouping)
+
+    return StatsResponse(
+        group_by=list(grouping),
+        window=StatsWindow(start=filters.start, end=filters.end),
+        groups=[
+            StatGroup(key=key, count=count, min=minimum, max=maximum, avg=average)
+            for key, count, minimum, maximum, average in groups
+        ],
     )

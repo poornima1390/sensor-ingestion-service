@@ -198,3 +198,43 @@ class BatchResponse(BaseModel):
 def reading_payload(reading: Any) -> dict[str, Any]:
     """Serialise a stored reading to plain JSON types."""
     return ReadingOut.model_validate(reading).model_dump(mode="json")
+
+
+class PaginationMeta(BaseModel):
+    limit: int
+    offset: int
+    total: int
+
+
+class ReadingListResponse(BaseModel):
+    items: list[ReadingOut]
+    pagination: PaginationMeta
+
+
+class StatsWindow(BaseModel):
+    start: datetime | None = None
+    end: datetime | None = None
+
+    @field_serializer("start", "end")
+    def _serialize_utc(self, value: datetime | None) -> str | None:
+        return None if value is None else _to_utc(value).isoformat().replace("+00:00", "Z")
+
+
+class StatGroup(BaseModel):
+    """One aggregation bucket.
+
+    `key` carries only the fields that were grouped on, so the response shape
+    follows the request rather than always carrying every possible dimension.
+    """
+
+    key: dict[str, str]
+    count: int
+    min: float
+    max: float
+    avg: float
+
+
+class StatsResponse(BaseModel):
+    group_by: list[str]
+    window: StatsWindow
+    groups: list[StatGroup]
