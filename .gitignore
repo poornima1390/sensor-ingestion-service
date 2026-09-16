@@ -1,0 +1,26 @@
+# Byte-compiled
+__pycache__/
+*.py[cod]
+
+# Virtualenvs (the real one lives in ~/.venvs, outside iCloud)
+.venv/
+venv/
+
+# Local database files
+.data/
+*.db
+*.db-wal
+*.db-shm
+
+# Secrets and local config
+.env
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# macOS / iCloud
+.DS_Store
+.icloud

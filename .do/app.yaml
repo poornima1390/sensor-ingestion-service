@@ -1,0 +1,43 @@
+name: sensor-ingestion-service
+region: nyc
+
+databases:
+  # Dev-tier Postgres attached to the app. Cheaper than a standalone managed
+  # cluster and provisioned with the app; the connection string is injected
+  # below, so nothing about it is hardcoded in the image.
+  - engine: PG
+    name: db
+    version: "16"
+
+services:
+  - name: api
+    dockerfile_path: Dockerfile
+    git:
+      # Public clone URL, so no DigitalOcean<->GitHub OAuth grant is required.
+      repo_clone_url: https://github.com/poornima1390/sensor-ingestion-service.git
+      branch: main
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    envs:
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        value: ${db.DATABASE_URL}
+      - key: LOG_LEVEL
+        scope: RUN_TIME
+        value: INFO
+    health_check:
+      # Liveness only. /readyz checks the database, and pointing the platform's
+      # restart probe at a dependency turns a brief DB blip into a restart storm.
+      http_path: /healthz
+      initial_delay_seconds: 20
+      period_seconds: 10
+      failure_threshold: 3
+
+ingress:
+  rules:
+    - component:
+        name: api
+      match:
+        path:
+          prefix: /
