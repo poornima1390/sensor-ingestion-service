@@ -159,7 +159,8 @@ Everything is environment-driven; there are no hardcoded values at the call site
 | `PORT` | `8080` | Injected by App Platform |
 | `LOG_LEVEL` | `INFO` | Set `DEBUG` to include probe traffic in the logs |
 | `DATABASE_URL` | `sqlite:///./.data/readings.db` | The single line that switches SQLite → Postgres |
-| `MAX_BATCH_SIZE` | `1000` | Ingest cap (enforced in Phase 2) |
+| `MAX_BATCH_SIZE` | `1000` | Ingest cap |
+| `CORS_ALLOW_ORIGINS` | `*` | Comma-separated browser origins |
 
 `DATABASE_URL` is normalised at startup: DigitalOcean emits `postgresql://`, and
 SQLAlchemy 2 requires an explicit driver, so it is rewritten to
@@ -239,6 +240,17 @@ distorts any average.
 Counters are **per-instance**. With more than one App Platform instance the
 scrape config must target instances individually and aggregate at query time; a
 single load-balanced `/metrics` returns one arbitrary instance's view.
+
+## CORS
+
+Browser origins are configured by `CORS_ALLOW_ORIGINS` and default to `*`, with
+credentials explicitly **off**.
+
+The wildcard is safe *here specifically* because there is no auth and no cookies:
+CORS is a browser-side control, and every endpoint is already reachable by any
+non-browser client. The same setting alongside credentialed auth would be a
+genuine vulnerability — `allow_credentials=True` with a wildcard origin is the
+classic mistake, and the pairing is why this config pins credentials off.
 
 ## What would change for production
 

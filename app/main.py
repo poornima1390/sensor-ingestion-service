@@ -4,6 +4,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import install_exception_handlers
 from app.api.routes import health, metrics, readings
@@ -43,6 +44,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
 
     app.add_middleware(RequestContextMiddleware)
+    # Added last, so it ends up outermost: preflight is answered before anything
+    # else runs, and CORS headers are attached even to error responses.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origin_list,
+        # No cookies or Authorization header, so credentials stay off. This is
+        # what makes a wildcard origin legitimate rather than a hole.
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["*"],
+        # So a browser client can read the correlation ID off the response.
+        expose_headers=["X-Request-ID"],
+    )
     install_exception_handlers(app)
     app.include_router(health.router)
     app.include_router(readings.router)

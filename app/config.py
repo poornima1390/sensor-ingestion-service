@@ -22,8 +22,18 @@ class Settings(BaseSettings):
     # The single line that switches SQLite -> Postgres.
     database_url: str = "sqlite:///./.data/readings.db"
 
-    # Ingest cap; enforced in Phase 2 when POST /readings lands.
+    # Ingest cap.
     max_batch_size: int = 1000
+
+    # Comma-separated browser origins allowed to call the API. Defaults to "*",
+    # which is safe here specifically because there is no auth and no cookies:
+    # CORS is a browser-side control, and every endpoint is already reachable by
+    # any non-browser client. It would NOT be safe alongside credentialed auth.
+    cors_allow_origins: str = "*"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_allow_origins.split(",") if origin.strip()]
 
 
 @lru_cache
