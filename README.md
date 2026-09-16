@@ -9,8 +9,8 @@ scaling path — lives in [Spec.md](Spec.md).
 
 ## Status
 
-**Phase 3 — query and aggregation.** All four functional endpoints are live and
-deployed. `/metrics` lands in Phase 4.
+**Phase 4 — observability.** All four functional endpoints plus Prometheus
+metrics are live and deployed. The build is feature-complete against the brief.
 
 | Endpoint | Status |
 |---|---|
@@ -19,7 +19,7 @@ deployed. `/metrics` lands in Phase 4.
 | `POST /readings` | ✅ live — single or batch, partial success |
 | `GET /readings` | ✅ live — filtering + pagination |
 | `GET /readings/stats` | ✅ live — min/max/avg/count aggregation |
-| `GET /metrics` | Phase 4 |
+| `GET /metrics` | ✅ live — Prometheus exposition |
 
 ## Ingestion contract
 
@@ -213,6 +213,33 @@ probe aimed at a dependency turns a brief database blip into a fleet-wide restar
 storm; liveness asks "is this process wedged?", readiness asks "should this
 instance take traffic?".
 
+## Observability
+
+`GET /metrics` serves Prometheus exposition format:
+
+| Metric | Type | Labels |
+|---|---|---|
+| `http_requests_total` | counter | `method`, `path`, `status` |
+| `http_request_duration_seconds` | histogram | `method`, `path` |
+| `readings_ingested_total` | counter | `sensor_type`, `status` |
+| `readings_ingest_lag_seconds` | histogram | — |
+
+**`path` is the matched route template, never the raw URL.** Using the raw path
+would mint a new time series for every URL a vulnerability scanner tries —
+unbounded cardinality wearing the costume of observability. Unmatched requests
+collapse into a single `<unmatched>` label, and there is a test that probes
+`/wp-admin.php` and `/.env` then asserts neither string appears anywhere in the
+exposition output.
+
+`readings_ingest_lag_seconds` measures `received_at - timestamp`. It is the
+metric that makes the distinction between *measured* and *received* actionable: a
+fleet that went offline and is replaying its buffer shows up here well before it
+distorts any average.
+
+Counters are **per-instance**. With more than one App Platform instance the
+scrape config must target instances individually and aggregate at query time; a
+single load-balanced `/metrics` returns one arbitrary instance's view.
+
 ## What would change for production
 
 - **Alembic migrations.** The schema is currently created with `create_all()` on
@@ -222,5 +249,8 @@ instance take traffic?".
   connection pooler.
 - **Auth on ingest.** An unauthenticated `POST /readings` lets anyone poison the
   fleet's analytics. See [Spec.md](Spec.md) §6.
+- **`/metrics` is currently public.** It leaks traffic shape and fleet size to
+  anyone who asks. It belongs behind network policy or an internal-only route
+  rather than on the public ingress.
 - **Queue-backed ingestion** at roughly 100x load, plus time-partitioned storage
   and pre-aggregated rollups so `/readings/stats` stops scanning raw rows.

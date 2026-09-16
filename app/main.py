@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.errors import install_exception_handlers
-from app.api.routes import health, readings
+from app.api.routes import health, metrics, readings
 from app.config import Settings, get_settings
 from app.observability.logging import configure_logging
 from app.observability.middleware import RequestContextMiddleware
@@ -46,6 +46,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     install_exception_handlers(app)
     app.include_router(health.router)
     app.include_router(readings.router)
+    app.include_router(metrics.router)
 
     return app
 

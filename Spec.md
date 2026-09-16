@@ -287,8 +287,11 @@ in-memory SQLite (fast local loop) and once against a Postgres service container
 - **Request:** none.
 - **Response (success):** `200`, `text/plain; version=0.0.4`
 - **Notes:** Exposes `readings_ingested_total{sensor_type,status}`,
-  `http_requests_total{method,path,status}`, and an
-  `http_request_duration_seconds` histogram. Per-instance counters — with multiple App
+  `http_requests_total{method,path,status}`, an `http_request_duration_seconds`
+  histogram, and `readings_ingest_lag_seconds` (`received_at - timestamp`).
+  The `path` label is the matched **route template**, never the raw URL: raw
+  paths would mint a time series per scanned URL, so unmatched requests collapse
+  into a single `<unmatched>` label. Per-instance counters — with multiple App
   Platform instances the scrape target must aggregate across them.
 
 ## 5. Validation Rules
@@ -461,6 +464,9 @@ histogram, a pool-saturation gauge, and an ingest-lag metric derived from
   coercion is how you get a dataset nobody trusts; explicit rejection is the safer default.
 - **Per-device calibration / schema** — all devices of a type share one range table.
 - **Backfill and deletion endpoints** — no `DELETE` or `PATCH`; readings are immutable facts.
+- **Access control on `/metrics`** — it is served on the public ingress, which
+  leaks traffic shape and fleet size. In production it belongs behind network
+  policy or on an internal-only listener.
 
 ## 10. Verification / Definition of Done
 

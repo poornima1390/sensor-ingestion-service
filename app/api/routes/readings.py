@@ -15,6 +15,7 @@ from app.api.errors import error_body
 from app.config import Settings, get_settings
 from app.domain.ingest import ingest_items
 from app.observability.logging import safe_extra
+from app.observability.metrics import INGEST_LAG, READINGS_INGESTED
 from app.schemas.query import Filters, GroupBy, Page
 from app.schemas.reading import (
     BatchResponse,
@@ -83,6 +84,7 @@ def _ingest_single(payload: dict[str, Any], session: Session) -> JSONResponse:
 
     session.commit()
     _log_outcome([result])
+    _record_metrics([result])
     # Per the contract, a single reading returns the bare stored record rather
     # than the batch envelope.
     return JSONResponse(
@@ -111,6 +113,7 @@ def _ingest_batch(payload: list[Any], session: Session, settings: Settings) -> J
     results = ingest_items(payload, ReadingRepository(session))
     session.commit()
     _log_outcome(results)
+    _record_metrics(results)
 
     summary = BatchSummary(
         received=len(results),
@@ -130,6 +133,21 @@ def _ingest_batch(payload: list[Any], session: Session, settings: Settings) -> J
 
     body = BatchResponse(summary=summary, results=results)
     return JSONResponse(status_code=status_code, content=body.model_dump(mode="json"))
+
+
+def _record_metrics(results: list[ItemResult]) -> None:
+    for result in results:
+        # A rejected item may have failed *because* its sensor_type was bad, so
+        # there is nothing trustworthy to label it with.
+        sensor_type = result.reading.sensor_type.value if result.reading else "unknown"
+        READINGS_INGESTED.labels(sensor_type=sensor_type, status=result.status).inc()
+
+        if result.status == "created" and result.reading is not None:
+            lag = (result.reading.received_at - result.reading.timestamp).total_seconds()
+            # Clock skew can make this slightly negative; a negative lag is not a
+            # meaningful observation.
+            if lag >= 0:
+                INGEST_LAG.observe(lag)
 
 
 def _log_outcome(results: list[ItemResult]) -> None:
