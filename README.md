@@ -9,17 +9,78 @@ scaling path — lives in [Spec.md](Spec.md).
 
 ## Status
 
-**Phase 1 — scaffold and deployment pipeline.** Layering, configuration, logging
-and health probes are live and deployed. The `/readings` endpoints land in Phase 2.
+**Phase 2 — ingestion.** Validation, storage and the partial-success batch
+contract are live. Query and aggregation land in Phase 3.
 
 | Endpoint | Status |
 |---|---|
 | `GET /healthz` | ✅ live — liveness probe, no DB dependency |
 | `GET /readyz` | ✅ live — readiness probe, checks the database |
-| `POST /readings` | Phase 2 |
-| `GET /readings` | Phase 2 |
-| `GET /readings/stats` | Phase 2 |
-| `GET /metrics` | Phase 3 |
+| `POST /readings` | ✅ live — single or batch, partial success |
+| `GET /readings` | Phase 3 |
+| `GET /readings/stats` | Phase 3 |
+| `GET /metrics` | Phase 4 |
+
+## Ingestion contract
+
+`POST /readings` accepts either one reading object or an array of them.
+
+A **single** reading returns the bare stored record on `201`, `422` if it fails
+validation, `409` if it duplicates an existing reading.
+
+A **batch** returns a per-item envelope, and the status line alone answers the
+common cases so a client only parses the body when the outcome was mixed:
+
+| Outcome | Status |
+|---|---|
+| every item stored | `201` |
+| mixed, or all duplicates | `207 Multi-Status` |
+| every item rejected | `422` |
+| empty array | `422` |
+| more than `MAX_BATCH_SIZE` items | `413` |
+
+```jsonc
+{
+  "summary": {"received": 3, "created": 1, "duplicate": 1, "rejected": 1},
+  "results": [
+    {"index": 0, "status": "created",   "reading": {"id": 2, "...": "..."}},
+    {"index": 1, "status": "duplicate", "reading": {"id": 1, "...": "..."}},
+    {"index": 2, "status": "rejected",
+     "errors": [{"field": "value", "code": "out_of_range",
+                 "message": "pressure value 9999.0 outside plausible range 300.0..1100.0"}]}
+  ]
+}
+```
+
+Results correlate by **`index`**, not `device_id` — a batch legitimately contains
+many readings from the same device, so the index is the only stable handle the
+client has.
+
+Valid items are stored even when siblings fail. That is the point of partial
+success: one malformed reading from a flaky sensor must not cost a fleet-wide
+batch its good data.
+
+### Validation
+
+| `sensor_type` | Plausible range | Canonical `unit` |
+|---|---|---|
+| `temperature` | −50 to 150 | `celsius` |
+| `humidity` | 0 to 100 | `percent` |
+| `pressure` | 300 to 1100 | `hpa` |
+| `battery` | 0 to 100 | `percent` |
+
+Timestamps are ISO-8601; naive values are assumed UTC, and anything more than 60
+seconds in the future is rejected. The tolerance is deliberate — device clocks
+drift, and rejecting a reading 200ms ahead of the server is a bug you find in
+production rather than in tests.
+
+A mismatched `unit` is **rejected, never converted**. Silently coercing
+fahrenheit to celsius is how you get a dataset nobody trusts. Unknown fields are
+ignored, so a firmware update adding one does not break ingestion fleet-wide.
+
+Deduplication uses the natural key `(device_id, sensor_type, timestamp)` backed by
+a unique index, so routine sensor retries do not skew the averages. It needs no
+client cooperation — no idempotency key to send.
 
 ## Quickstart
 
@@ -75,7 +136,7 @@ request via a dependency and never shared across threads.
 
 ```bash
 make test      # in-memory SQLite — the fast inner loop
-make test-pg   # same suite against Postgres (docker compose up -d postgres first)
+make test-pg   # same suite against Postgres (starts it on :5440 for you)
 ```
 
 CI runs both. Testing only on SQLite while deploying to Postgres produces a green

@@ -103,6 +103,10 @@ def create_all() -> None:
     Fine for a greenfield single-table service. Alembic is the first thing added
     once the schema has to change without dropping data.
     """
+    # Imported for its side effect: models must be imported before create_all
+    # or the metadata is empty and no tables are created.
+    from app.storage import models  # noqa: F401
+
     Base.metadata.create_all(bind=get_engine())
 
 

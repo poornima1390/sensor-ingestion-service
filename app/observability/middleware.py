@@ -7,7 +7,7 @@ import uuid
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
-from app.observability.logging import request_id_var
+from app.observability.logging import request_id_var, safe_extra
 
 logger = logging.getLogger("app.request")
 
@@ -32,15 +32,18 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         except Exception:
             logger.exception(
                 "request failed",
-                extra={
-                    "http_method": request.method,
-                    "http_path": request.url.path,
-                    "duration_ms": round((time.perf_counter() - started) * 1000, 2),
-                },
+                extra=safe_extra(
+                    http_method=request.method,
+                    http_path=request.url.path,
+                    duration_ms=round((time.perf_counter() - started) * 1000, 2),
+                ),
             )
+            # Deliberately not resetting the ContextVar here. The 500 handler
+            # runs in ServerErrorMiddleware, which sits *outside* this one in the
+            # same task, so resetting would strip the request ID from exactly the
+            # response that most needs it. Each request runs in its own task with
+            # its own context, so nothing leaks between requests.
             raise
-        finally:
-            request_id_var.reset(token)
 
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         response.headers[REQUEST_ID_HEADER] = request_id
@@ -49,11 +52,12 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         logger.log(
             level,
             "request",
-            extra={
-                "http_method": request.method,
-                "http_path": request.url.path,
-                "status_code": response.status_code,
-                "duration_ms": duration_ms,
-            },
+            extra=safe_extra(
+                http_method=request.method,
+                http_path=request.url.path,
+                status_code=response.status_code,
+                duration_ms=duration_ms,
+            ),
         )
+        request_id_var.reset(token)
         return response

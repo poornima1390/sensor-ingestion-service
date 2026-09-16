@@ -105,10 +105,15 @@ def install_exception_handlers(app: FastAPI) -> None:
     async def _unhandled(_request: Request, exc: Exception) -> JSONResponse:
         # Full traceback to the logs, nothing internal to the client.
         logger.exception("unhandled exception", extra={"exception_type": type(exc).__name__})
+        # This handler runs in ServerErrorMiddleware, outside the request
+        # middleware, so it has to attach the correlation header itself — the
+        # middleware re-raised before it got the chance.
+        request_id = request_id_var.get()
         return JSONResponse(
             status_code=500,
             content=error_body(
                 "internal_error",
                 "An unexpected error occurred. The incident has been logged.",
             ),
+            headers={"X-Request-ID": request_id} if request_id else None,
         )

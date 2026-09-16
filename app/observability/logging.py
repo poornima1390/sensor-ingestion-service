@@ -44,6 +44,18 @@ _RESERVED = {
 }
 
 
+def safe_extra(**fields: object) -> dict[str, object]:
+    """Build a logging `extra` dict that cannot collide with LogRecord internals.
+
+    logging.makeRecord raises KeyError when `extra` contains a reserved
+    attribute name such as `created`, `module` or `name`. That turns a log line
+    into a 500 on the request it was meant to describe, and it only fires when
+    the level is actually enabled — so a suite that runs at WARNING will not
+    catch it. Renaming rather than dropping keeps the value in the log.
+    """
+    return {(f"{key}_" if key in _RESERVED else key): value for key, value in fields.items()}
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, object] = {

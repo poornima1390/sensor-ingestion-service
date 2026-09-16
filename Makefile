@@ -8,6 +8,12 @@ PIP  := $(VENV)/bin/pip
 IMAGE ?= sensor-ingestion-service
 APP_NAME ?= sensor-ingestion-service
 
+# Compose ships as a docker plugin (v2) or a standalone binary (v1) depending on
+# the install; support whichever is present.
+COMPOSE := $(shell docker compose version >/dev/null 2>&1 && echo "docker compose" || echo "docker-compose")
+
+TEST_PG_URL ?= postgresql://postgres:postgres@localhost:5440/sensors
+
 .DEFAULT_GOAL := help
 
 .PHONY: help
@@ -32,9 +38,19 @@ run: ## Run the API locally with autoreload
 test: ## Run the suite against in-memory SQLite
 	$(PY) -m pytest
 
+.PHONY: pg-up
+pg-up: ## Start the local Postgres used by test-pg
+	$(COMPOSE) up -d postgres
+	@until $(COMPOSE) exec -T postgres pg_isready -U postgres >/dev/null 2>&1; do sleep 1; done
+	@echo "postgres ready on 5440"
+
+.PHONY: pg-down
+pg-down: ## Stop the local Postgres
+	$(COMPOSE) down
+
 .PHONY: test-pg
-test-pg: ## Run the same suite against a local Postgres (needs docker compose up -d)
-	TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/sensors $(PY) -m pytest
+test-pg: pg-up ## Run the same suite against local Postgres (the dialect prod uses)
+	TEST_DATABASE_URL=$(TEST_PG_URL) $(PY) -m pytest
 
 .PHONY: lint
 lint: ## Check formatting and lint rules
